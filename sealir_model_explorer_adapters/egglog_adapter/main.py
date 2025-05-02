@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 from typing import Dict
 
 from model_explorer import (
@@ -34,6 +35,9 @@ class EgraphJsonAdapter(Adapter):
         # Make nodes
         nodes = {}
         for node_k, node_info in jsdata["nodes"].items():
+            if node_info["subsumed"]:
+                # skip subsumed
+                continue
             nodes[node_k] = node = graph_builder.GraphNode(
                 id=node_k,
                 label=node_info["op"],
@@ -49,9 +53,11 @@ class EgraphJsonAdapter(Adapter):
         for node_k, node in nodes.items():
             children = jsdata["nodes"][node_k]["children"]
             for child_id, child in enumerate(children):
-                nodes[child].incomingEdges.append(
+                # Each node is op(*children)
+                # The children are the inputs.
+                nodes[node_k].incomingEdges.append(
                     graph_builder.IncomingEdge(
-                        sourceNodeId=node_k, sourceNodeOutputId=str(child_id)
+                        sourceNodeId=child, targetNodeInputId=str(child_id)
                     )
                 )
 

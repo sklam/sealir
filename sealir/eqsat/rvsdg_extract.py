@@ -207,7 +207,7 @@ class Extraction:
 
         # Repeatedly compute cost and propagate while keeping the best variant
         # for each eclass. If root score is computed, return early.
-        no_progress = NoProgress(max_no_progress)
+        no_progress = NoProgress(self, max_no_progress)
         for round_i in range(max_iter):
             # propagate
             for k, node in nodes.items():
@@ -222,11 +222,24 @@ class Extraction:
 
     def choose(self) -> tuple[float, nx.MultiDiGraph]:
         selections = self._compute_cost()
+        sgb = SelectionGraphBuilder(
+            nodes=self.nodes,
+            selections=selections,
+            root_eclass=self.root_eclass,
+        )
+        return sgb.build_graph()
 
+
+@dataclass(frozen=True)
+class SelectionGraphBuilder:
+    nodes: dict
+    selections: dict
+    root_eclass: str
+
+    def build_graph(self) -> tuple[float, nx.MultiDiGraph]:
         nodes = self.nodes
+        selections = self.selections
         chosen_root, rootcost = selections[self.root_eclass].best()
-        sentry_cost(rootcost)
-
         # make selected graph
         G = nx.MultiDiGraph()
         todolist = [chosen_root]
@@ -236,23 +249,59 @@ class Extraction:
             if cur in visited:
                 continue
             visited.add(cur)
-
             for i, u in enumerate(nodes[cur].children):
                 child_eclass = nodes[u].eclass
-                child_key, cost = selections[child_eclass].best()
-                sentry_cost(cost)
+                child_key = selections[child_eclass].best().name
                 G.add_edge(cur, child_key, label=int(i))
                 todolist.append(child_key)
-
         return rootcost, G
 
 
 class ExtractionError(Exception):
-    pass
+    extraction: Extraction
+    selections: dict[str, Bucket]
+
+    def __init__(
+        self,
+        message: str,
+        extraction: Extraction,
+        selections: dict[str, Bucket],
+    ):
+        super().__init__(message)
+        self.extraction = extraction
+        self.selections = selections
+
+    def list_unextractables(self) -> list[str]:
+        """Returns a list of unextractable nodes in toposort order.
+
+        Note: the graph root is the output.
+        """
+        failed = [
+            eclass
+            for eclass, bucket in self.selections.items()
+            if math.isinf(bucket.best().cost)
+        ]
+        nodes = self.extraction.nodes
+        sgb = SelectionGraphBuilder(
+            nodes=nodes,
+            selections=self.selections,
+            root_eclass=self.extraction.root_eclass,
+        )
+        _, G = sgb.build_graph()
+
+        # Find unextractable nodes in toposort order.
+        # Since the graph start from the result, the last node is the first
+        # problem.
+        failed_nodes = []
+        for node in nx.topological_sort(G):
+            if nodes[node].eclass in failed:
+                failed_nodes.append(node)
+        return failed_nodes
 
 
 @dataclass
 class NoProgress:
+    extraction: Extraction
     max_no_progress: int
     "Maximum iteration without progress"
     _last_iteration: int = 0
@@ -280,8 +329,12 @@ class NoProgress:
         if self._last_captured:
             if state == self._last_captured:
                 raise ExtractionError(
-                    "extraction stopped due to lack of progress for "
-                    f"{self.max_no_progress} iterations"
+                    extraction=self.extraction,
+                    selections=selections,
+                    message=(
+                        "extraction stopped due to lack of progress for "
+                        f"{self.max_no_progress} iterations"
+                    ),
                 )
         self._last_captured = state
 
@@ -289,11 +342,6 @@ class NoProgress:
 class _NameAndCostTuple(NamedTuple):
     name: str
     cost: float
-
-
-def sentry_cost(cost: float) -> None:
-    if math.isinf(cost):
-        raise ValueError("invalid cost extracted")
 
 
 class Bucket:

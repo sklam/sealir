@@ -37,6 +37,7 @@ def egraph_extraction(
     *,
     cost_model=None,
     converter_class=EGraphToRVSDG,
+    debug_exgraph_filename: str | None = None,
 ):
     gdct: EGraphJsonDict = json.loads(
         egraph._serialize(
@@ -50,6 +51,9 @@ def egraph_extraction(
     extraction = Extraction(gdct, root_eclass, cost_model)
     cost, exgraph = extraction.choose()
 
+    if debug_exgraph_filename is not None:
+        render_extraction_graph(exgraph, filename=debug_exgraph_filename)
+
     expr = convert_to_rvsdg(
         exgraph,
         gdct,
@@ -59,6 +63,11 @@ def egraph_extraction(
         converter_class=converter_class,
     )
     return cost, expr
+
+
+def render_extraction_graph(G: nx.MultiDiGraph, filename: str):
+    """Render extraction-graph to SVG."""
+    nx.drawing.nx_pydot.to_pydot(G).write_svg(filename + ".svg")
 
 
 def convert_to_rvsdg(
